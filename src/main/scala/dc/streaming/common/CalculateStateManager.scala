@@ -1,7 +1,6 @@
 package dc.streaming.common
 
 import java.util
-
 import dc.streaming.common.CalculateStateManager.{ExceptionWriteMode, State, StateInfo, TimePeriodWriteMode}
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.streaming.GroupState

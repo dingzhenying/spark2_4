@@ -56,7 +56,7 @@ trait KafkaAndAbnormalDBWriter extends Serializable with Logging {
       .filter(s"exceptionWriteMode=${ExceptionWriteMode.NO_WRITE} " +
         s"AND timePeriodWriteMode=${TimePeriodWriteMode.NO_WRITE}")
     // 写入kafka
-    log.debug("The normal data after processing is being written to kafka.")
+    log.debug("The normal data after dc.streaming.processing is being written to kafka.")
     formatKafkaData(normal).write
       .format("kafka")
       .option("kafka.bootstrap.servers", options("bootstrapServers"))

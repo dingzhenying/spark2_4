@@ -3,7 +3,7 @@ package dc.streaming.common
 import com.alibaba.fastjson.parser.Feature
 import com.alibaba.fastjson.{JSON, JSONObject, JSONPath}
 import org.apache.http.client.fluent.Request
-import org.apache.spark.sql.functions.{explode, from_json}
+import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
@@ -13,9 +13,9 @@ import org.apache.spark.sql.{DataFrame, Row, SparkSession}
   */
 class KafkaDataWithRuleReader(@transient spark: SparkSession) extends Serializable {
 
-  import spark.implicits._
-  import org.apache.spark.sql.functions._
   import KafkaDataWithRuleReader._
+  import org.apache.spark.sql.functions._
+  import spark.implicits._
 
   private val extraOptions = new scala.collection.mutable.HashMap[String, String]
 
@@ -172,6 +172,7 @@ object KafkaDataWithRuleReader {
     var retries = 0
     var rules = Map[String, Map[String, String]]()
     import scala.collection.JavaConverters._
+
     while (retries < retry) {
       val response = Request.Get(api).execute().returnResponse()
       if (response.getStatusLine.getStatusCode == 200) {

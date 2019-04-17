@@ -1,6 +1,9 @@
 package structuredStreaming
 
+import java.util
+
 import com.spark.sparkStreaming.CumulativeAmountDiscrimination.schema
+import dc.streaming.common.CalculateStateManager.StateInfo
 import org.apache.spark.sql.{DataFrame, Encoder, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.{GroupState, GroupStateTimeout, OutputMode}
@@ -13,7 +16,7 @@ import scala.collection.mutable.ListBuffer
 /**
   * Created by Dingzhenying on 2019/3/27
   */
-object flatMapGropsWithStateTest {
+object minAvgflatMapGropsWithState {
   val spark = SparkSession
     .builder()
     .appName(this.getClass.getSimpleName)
@@ -71,22 +74,23 @@ object flatMapGropsWithStateTest {
   case class outData(gatewayId: String, namespace: String, pointId: String, t: String, sum_v: Double, avg_v: Double, last_v: Double, s: String)
 
   //迭代器
-  def calculate(id: String, inData: Iterator[DataInfo], oldState: GroupState[State]): Iterator[outData] = {
-    val updateDeviceWithRanges = mutable.TreeMap[String, outData]()
+  def calculate(id: String, inData: Iterator[DataInfo], oldState: GroupState[State]) = {
+//    val filterKey:Long = oldState.getCurrentWatermarkMs()
+//    println("filterKey"+filterKey)
+    //设置超时时间
+    //oldState.setTimeoutTimestamp(1000)
+
+    val updateDeviceWithRanges : mutable.TreeMap[String, outData]=new mutable.TreeMap[String, outData]
+    //设置时间超时时间
     //历史状态
-    var olderData: State = oldState.getOption.getOrElse(mutable.Map(Device("", "") -> ListBuffer(0)))
-    println("Watermark:" + oldState.getCurrentWatermarkMs())
-    //    var upDate:State =oldState.getOption.get
+    var olderData: State = oldState.getOption.getOrElse( mutable.Map[Device, ListBuffer[Double]](Device("","")->new ListBuffer[Double]))
+    //var upDate:State =oldState.getOption.get
     inData.foreach(data => {
+
       var oldValue: ListBuffer[Double] = olderData.getOrElse(Device(data.pointId, data.t3), new ListBuffer[Double])
-//      println("oldValue:"+oldValue)
-      println(s"oldValue = ${oldValue}")
       //添加参数
       oldValue.+=(data.v.toDouble)
       olderData += (Device(data.pointId, data.t3) -> oldValue)
-      //      println("传入数据：" + data)
-      //      println("olderData：" + olderData)
-      //      println("历史值：" + oldValue)
 
       val sumData: Double = oldValue.sum
       val avgData: Double = sumData / oldValue.size
@@ -94,11 +98,9 @@ object flatMapGropsWithStateTest {
       //println("sum:"+sumData+" size:"+oldValue.size+" avg:"+avgData+" lastData:"+lastData)
 
       updateDeviceWithRanges.put(data.t3, outData(data.gatewayId, data.namespace, data.pointId, data.t3, sumData, avgData, lastData, data.s))
-
     })
     oldState.update(olderData)
-    println(oldState.getOption)
-    updateDeviceWithRanges.values.toIterator
+    updateDeviceWithRanges.valuesIterator
   }
 
   //  分钟取值

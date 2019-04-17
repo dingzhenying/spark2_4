@@ -1,4 +1,4 @@
-package demo
+package dc.streaming.processing
 
 import java.util.UUID
 

@@ -3,11 +3,9 @@ package dc.streaming.sink.jdbcSink
 import java.sql.{Connection, Statement}
 
 import com.google.gson.Gson
-import demo.SwitchDataCleaning.splitData
-import org.apache.commons.dbcp2.BasicDataSource
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.TimestampType
-import org.apache.spark.sql.{DataFrame, ForeachWriter, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, SparkSession}
 
 
 /**
@@ -93,6 +91,9 @@ object JdbcSinkWriterTest {
 
   val limitDiscriminateUDF = udf(simpleDiscriminate _)
 
+  val splitData = udf((data: String, int: Int) => {
+    data.substring(int)
+  })
   def simpleDiscriminate(v: Double, lower_bound: Double, upper_bound: Double): Boolean = {
     lower_bound < v && v < upper_bound
   }

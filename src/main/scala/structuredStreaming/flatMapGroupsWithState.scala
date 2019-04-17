@@ -49,7 +49,7 @@ object flatMapGroupsWithState {
       .writeStream
       .outputMode("update")
       .format("console")
-      .option("truncate", value = false)
+      .option("truncate", value = false)//控制台输出
       .start()
     writer.awaitTermination()
   }

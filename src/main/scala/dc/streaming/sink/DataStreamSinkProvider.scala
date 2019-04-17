@@ -8,6 +8,7 @@ import org.apache.spark.sql.sources.{DataSourceRegister, StreamSinkProvider}
 import org.apache.spark.sql.streaming.OutputMode
 
 
+
 /**
   * Created by Dingzhenying on 2019/1/22
   *
