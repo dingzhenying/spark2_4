@@ -1,21 +1,26 @@
 package dc.streaming.common
 
+import java.util.Date
+
 import com.alibaba.fastjson.parser.Feature
 import com.alibaba.fastjson.{JSON, JSONObject, JSONPath}
 import org.apache.http.client.fluent.Request
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+
+import scala.collection.mutable.ListBuffer
 
 /**
   * @author : shirukai
   * @date : 2019-01-31 11:00
   */
+
 class KafkaDataWithRuleReader(@transient spark: SparkSession) extends Serializable {
 
-  import KafkaDataWithRuleReader._
-  import org.apache.spark.sql.functions._
   import spark.implicits._
+  import org.apache.spark.sql.functions._
+  import KafkaDataWithRuleReader._
 
   private val extraOptions = new scala.collection.mutable.HashMap[String, String]
 
@@ -33,7 +38,7 @@ class KafkaDataWithRuleReader(@transient spark: SparkSession) extends Serializab
   }
 
   private def handlerSource(source: DataFrame): DataFrame = {
-    source.select(from_json('value.cast("string"), ArrayType(schema)).as("values"))
+    source.select(from_json('value.cast("string"), ArrayType(StructType(baseSchema))).as("values"))
       .select(explode('values))
       .select("col.*")
       .withColumnRenamed("v", "value")
@@ -87,12 +92,11 @@ class KafkaDataWithRuleReader(@transient spark: SparkSession) extends Serializab
 
     val handleValueUDF = udf(handleValue _)
     df.withColumn("v", handleValueUDF($"value"))
-      .withColumn("eventTime", ($"timestamp" / 1000).cast(TimestampType))
+      .withColumn("wt", ($"timestamp" / 1000).cast(TimestampType))
       .withColumn("t", $"timestamp".cast(LongType))
       .drop("value")
 
   }
-
 
 }
 
@@ -103,30 +107,28 @@ object KafkaDataWithRuleReader {
   val DC_CLEANING_RULE_COLUMN_PREFIX = "dc.cleaning.rule.column."
   val DC_CLEANING_RULE_SERVICE_API = "dc.cleaning.rule.service.api"
 
-  private lazy val schema = StructType(Seq(
+  private lazy val baseSchema = List(
     StructField("gatewayId", StringType),
     StructField("namespace", StringType),
     StructField("pointId", StringType),
     //StructField("regions", StringType),
-    StructField("t", StringType),
-    StructField("v", StringType),
+    StructField("t", LongType),
     StructField("s", StringType))
-  )
 
   def generateColumnSchema(parameters: Map[String, String]): StructType = {
-    StructType(List(StructField("id", StringType), StructField("uri", StringType)) ::: parameters.map(p => StructField(p._1, StringType)).toList)
+    StructType(List(StructField("id", StringType), StructField("uri", StringType)) :::
+      parameters.map(p => StructField(p._1, StringType)).toList)
   }
 
-  def handleStreamDataFrame(stream: DataFrame): DataFrame = {
-    stream.select(from_json(col("value").cast("string"), ArrayType(schema)).as("values"))
-      .select(explode(col("values")))
-      .select("col.*")
-      .withColumnRenamed("v", "value")
-      .withColumnRenamed("t", "timestamp")
+  val currentTimestamp: UserDefinedFunction = udf {
+    () => {
+      // get current timestamp (millisecond level)
+      new Date().getTime
+    }
   }
-
-  def joinRules(stream: DataFrame, api: String, ruleOptions: Map[String, String]): DataFrame = {
-    def handleValue(v: String): Double = {
+  val formatValue: UserDefinedFunction = udf {
+    v: String => {
+      // format value
       if (v.contains("#")) {
         val value = v.substring(2)
         if (v.contains("B#")) value match {
@@ -135,22 +137,53 @@ object KafkaDataWithRuleReader {
         } else value.toDouble
       } else v.toDouble
     }
+  }
 
-    val handleValueUDF = udf(handleValue _)
-    val streamDataFrame = handleStreamDataFrame(stream).as("stream")
+  def handleStreamDataFrame(stream: DataFrame, markSystemTime: Boolean = false): DataFrame = {
+
+    val streamSchema = {
+      if (!markSystemTime) {
+        baseSchema ::: List(
+          StructField("st", LongType),
+          StructField("v", DoubleType)
+        )
+      } else {
+        baseSchema ::: List(
+          StructField("v", StringType)
+        )
+      }
+    }
+    val processedSource = stream.select(
+      from_json(col("value").cast("string"), ArrayType(StructType(streamSchema))).as("values"))
+      .select(explode(col("values")))
+      .select("col.*")
+      // add window time column to stream
+      .withColumn("wt", (col("t") / 1000).cast(TimestampType))
+    if (markSystemTime) {
+      processedSource
+        // filter column contains 'S#'
+        .filter(!_.getAs[String]("v").contains("S#"))
+        // handle value
+        .withColumnRenamed("v", "value")
+        .withColumn("v", formatValue(col("value")))
+        // add system timestamp column to stream
+        .withColumn("st", currentTimestamp())
+        .drop("value")
+    } else processedSource
+  }
+
+  def joinRules(stream: DataFrame, api: String, ruleOptions: Map[String, String], markSystemTime: Boolean = false):
+  DataFrame = {
+    val streamDataFrame = handleStreamDataFrame(stream, markSystemTime).as("stream")
     val ruleDataFrame = loadRuleDataFrame(streamDataFrame.sparkSession, api, ruleOptions).as("rules")
-
-    streamDataFrame.filter(!_.getAs[String]("value").contains("S#"))
+    println(ruleDataFrame.count())
+    streamDataFrame
       // .withColumn("id", $"pointId")
       .join(ruleDataFrame, expr(
       """
               rules.id = concat("/",stream.gatewayId,"/",stream.pointId)
             """
     ), "leftOuter")
-      .withColumn("v", handleValueUDF(col("value")))
-      .withColumn("eventTime", (col("timestamp") / 1000).cast(TimestampType))
-      .withColumn("t", col("timestamp").cast(LongType))
-      .drop("value")
   }
 
   def loadRuleDataFrame(@transient spark: SparkSession, api: String, ruleOptions: Map[String, String]): DataFrame = {
@@ -172,12 +205,12 @@ object KafkaDataWithRuleReader {
     var retries = 0
     var rules = Map[String, Map[String, String]]()
     import scala.collection.JavaConverters._
-
     while (retries < retry) {
       val response = Request.Get(api).execute().returnResponse()
       if (response.getStatusLine.getStatusCode == 200) {
         try {
-          val res = JSON.parseObject(response.getEntity.getContent, classOf[JSONObject], Feature.OrderedField).asInstanceOf[JSONObject]
+          val res = JSON.parseObject(response.getEntity.getContent, classOf[JSONObject], Feature.OrderedField)
+            .asInstanceOf[JSONObject]
           rules = res.getJSONArray("data").asScala.flatMap(x => {
             val j = x.asInstanceOf[JSONObject]
             val instanceParams = j.getString("instanceParams")

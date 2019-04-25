@@ -15,13 +15,16 @@ object  foreachBeach {
   val pwd = "postgres"
   val driver = "org.postgresql.Driver"
   val tableName="cleandata"
+  private val URL = "localhost:2181"
+  private val KAFKA_URL = "localhost:9092"
+  private val NAME = "kafka_test"
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().appName(this.getClass.getSimpleName).master("local[2]").getOrCreate()
     import spark.implicits._
     val read=spark.readStream
       .format("kafka")
-      .option("kafka.bootstrap.servers", "192.168.66.194:9092")
-      .option("subscribe", "dc-data")
+      .option("kafka.bootstrap.servers", KAFKA_URL)
+      .option("subscribe", NAME)
       .option("failOnDataLoss", "false") //数据丢失f失败
       //.option("startingOffsets", "latest")
       .load()
@@ -32,7 +35,7 @@ object  foreachBeach {
        .withColumn("t", from_unixtime($"t"/1000, "yyyy-MM-dd HH:mm:ss"))
        .withColumn("v", splitData($"v", lit(2)))
 //       .groupBy(window($"t", "1 minute", "1 minute"), $"pointId") //滚动窗口前闭后开
-       .agg(avg("v").as("aveValue"),last("v").as("minValue"), last("t").as("time"))
+//       .agg(avg("v").as("aveValue"),last("v").as("minValue"), last("t").as("time"))
        .writeStream
       .outputMode("update")
        .foreachBatch((batchDF: DataFrame, batchId: Long) =>

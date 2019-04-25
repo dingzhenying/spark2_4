@@ -48,7 +48,7 @@ object minAvgflatMapGropsWithState {
       .groupByKey(_.pointId)
       .flatMapGroupsWithState(
         outputMode = OutputMode.Update(),
-        timeoutConf = GroupStateTimeout.NoTimeout)(func = calculate)
+        timeoutConf = GroupStateTimeout.EventTimeTimeout())(func = calculate)
 
     val write = data
       .writeStream
@@ -75,10 +75,15 @@ object minAvgflatMapGropsWithState {
 
   //迭代器
   def calculate(id: String, inData: Iterator[DataInfo], oldState: GroupState[State]) = {
-//    val filterKey:Long = oldState.getCurrentWatermarkMs()
-//    println("filterKey"+filterKey)
+    println(oldState.hasTimedOut)
+    oldState.getCurrentWatermarkMs()
+    val filterKey:Long = oldState.getCurrentWatermarkMs()
+    println("filterKey"+filterKey)
     //设置超时时间
-    //oldState.setTimeoutTimestamp(1000)
+    if(filterKey>0){
+      oldState.setTimeoutTimestamp(filterKey)
+
+    }
 
     val updateDeviceWithRanges : mutable.TreeMap[String, outData]=new mutable.TreeMap[String, outData]
     //设置时间超时时间

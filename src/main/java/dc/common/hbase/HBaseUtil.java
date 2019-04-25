@@ -168,7 +168,7 @@ public class HBaseUtil {
             admin.disableTable(tableName);
             admin.truncateTable(TableName.valueOf(tableName),true);
             //删完数据自动enable
-           // admin.enableTable(tableName);
+            // admin.enableTable(tableName);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -413,7 +413,13 @@ public class HBaseUtil {
     }
 
     public static long getTimeFromRowkey(String rowkey){
-        return Long.valueOf(rowkey.substring(rowkey.length()-(13-n)))*(int)Math.pow(10,n);
+        long time = 0;
+        try{
+            time = Long.valueOf(rowkey.substring(rowkey.length()-(13-n)))*(int)Math.pow(10,n);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+        return time;
     }
 
 }

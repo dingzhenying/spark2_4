@@ -1,15 +1,16 @@
 package structuredStreaming
 
 import java.util
-import java.util.UUID
+import java.util.{Date, UUID}
 
 import dc.common.hbase.HBaseUtil
 import dc.streaming.common.KafkaDataWithRuleReader
+import org.apache.commons.httpclient.util.DateUtil
 import org.apache.hadoop.hbase.client.Put
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.{GroupState, GroupStateTimeout, OutputMode}
-import org.apache.spark.sql.types.TimestampType
+import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 import scala.collection.mutable
@@ -34,32 +35,22 @@ import scala.collection.mutable.ListBuffer
   *
   */
 object MinuteValueFlatMapGroupWith {
-  def catalog: String =
-    s"""{
-       |"table":{"namespace":"default", "name":"tableTest"},
-       |"rowkey":"key",
-       |"columns":{
-       |"rowKey":{"cf":"rowkey", "col":"key", "type":"string"},
-       |"v":{"cf":"info", "col":"v", "type":"double"},
-       |"t":{"cf":"info", "col":"t", "type":"long"}
-       |}
-       |}""".stripMargin
-
-
-  val spark: SparkSession = SparkSession
-    .builder()
-    .appName(this.getClass.getSimpleName)
-    .master("local[2]")
-    .config("spark.sql.shuffle.partitions", 10)
-    .config("spark.debug.maxToStringFields", 100)
-    .config("spark.sql.codegen.wholeStage", value = false)
-    .getOrCreate()
-
-  import spark.implicits._
-
-  spark.conf.set("spark.sql.codegen.wholeStage", value = false)
 
   def main(args: Array[ String ]): Unit = {
+
+    val spark: SparkSession = SparkSession
+      .builder()
+      .appName(this.getClass.getSimpleName)
+      .master("local[2]")
+      .config("spark.sql.shuffle.partitions", 10)
+      .config("spark.debug.maxToStringFields", 100)
+      .config("spark.sql.codegen.wholeStage", value = false)
+      .getOrCreate()
+
+    import spark.implicits._
+
+    spark.conf.set("spark.sql.codegen.wholeStage", value = false)
+
     if (args.length < 9) {
       System.err.println("Usage:" +
         "<kafkaBootstrapServers> <inputKafkaTopicName> <maxOffsetsPerTrigger>" +
@@ -78,7 +69,7 @@ object MinuteValueFlatMapGroupWith {
     var checkpointLocation =
       if (args.length > 9) args(9) else "./tmp/temporary-MinuteValueFlatMapGroupWith-" + UUID.randomUUID.toString
 
-    checkpointLocation="hdfs://192.168.66.192:8020/tmp/dc-streaming/checkpoint/MinuteValueFlatMapGroupWith/"+UUID.randomUUID.toString
+    checkpointLocation="hdfs://192.168.66.192:8020/tmp/dc-streaming/checkpoint/MinuteValueFlatMapGroupWith2/"+UUID.randomUUID.toString
     //绑定规则获取数据
     val kafkaData = spark
       .readStream
@@ -86,7 +77,6 @@ object MinuteValueFlatMapGroupWith {
       .option("kafka.bootstrap.servers", kafkaBootstrapServers)
       .option("subscribe", inputKafkaTopicName)
       .option("maxOffsetsPerTrigger", maxOffsetsPerTrigger)
-      //      .option("startingOffsets", "earliest")
       .option("failOnDataLoss", "true")
       .load()
     while (true) {
@@ -98,24 +88,21 @@ object MinuteValueFlatMapGroupWith {
 
 
       val outData=minDataStart
-//        cleanDBDataFream(minDataStart)
         .writeStream
-        .outputMode("Update")
+        .outputMode("update")
 //        .foreachBatch((dataFrame: DataFrame, batchId: Long) => {
 //          val df = dataFrame.persist()
-//                    df.printSchema()
-//                    df.show(false)
+//          df.printSchema()
+//          df.show(false)
 //          //缓存
-//          val minValue = cleanDBDataFream(df, hbaseRegionsNumber.toInt)
+////          val minValue = cleanDBDataFream(df, hbaseRegionsNumber.toInt)
 //          //  minValue.printSchema()
-//          //          minValue.show(false)
-//
-//          wirterHbase(minValue)
-//
+//          //  minValue.show(false)
+////          writeHbase(minValue)
 //          df.unpersist() //清除缓存
 //        })
         .format("console")
-        .option("truncate", value = false)
+        .option("truncate", false)
         .start()
       while (outData.status.isTriggerActive) {}
       outData.awaitTermination(awaitTermination.toInt)
@@ -125,23 +112,26 @@ object MinuteValueFlatMapGroupWith {
 
     def minDataCleaning(data: DataFrame) = {
       //目标数据集获取做窗口聚合
+      data.printSchema()
       data
-        .withColumn("t2", from_unixtime($"t" / 1000).cast(TimestampType))
+        .filter($"id".isNotNull)
+//        .filter($"id"==="/SymLink-bewg-YanLiangWSC/PLC01_300.S_PLC1.S_HIGHTP_MIXM2_LR")
+//        .withColumn("t2", from_unixtime($"t" / 1000).cast(TimestampType))
         .withColumn("t3", from_unixtime($"t" / 1000, "yyyy-MM-dd HH:mm"))
         .as[ DataInfo ]
-        .withWatermark("t2", "10 minutes")
-
+        .withWatermark("wt", "1 minutes")
         .groupByKey(_.pointId)
         .flatMapGroupsWithState(
           outputMode = OutputMode.Update(),
           timeoutConf = GroupStateTimeout.EventTimeTimeout())(func = calculate)
-        .as[outData]
+
+//        .as[outData]
     }
 
-    def wirterHbase(minValue: DataFrame) = {
+    def writeHbase(minValue: DataFrame) = {
       val columnFamilyName: String = "c"
       minValue.foreachPartition(rows => {
-        var puts = new util.ArrayList[ Put ]
+        val puts = new util.ArrayList[ Put ]
         rows.foreach(row => {
           val key = row.getAs[ String ]("rowKey")
           val p = new Put(Bytes.toBytes(key))
@@ -169,15 +159,14 @@ object MinuteValueFlatMapGroupWith {
           HBaseUtil.getHashRowkeyWithSalt(uri, timestamp, numRegions)
         }
       }
-      val cleanData = df
-        .withWatermark("eventTime", watermarkDelayThreshold)
-        .groupBy(window($"eventTime", "1 minute", "30 second"), $"uri") //滚动窗口前闭后开
+      df
+        .withWatermark("wt", watermarkDelayThreshold)
+        .groupBy(window($"wt", "1 minute", "1 minute"), $"uri") //滚动窗口前闭后开
         .agg(last("v").as("v"))
         .repartition($"uri")
         .withColumn("t", unix_timestamp($"window.end", "yyyy-MM-dd HH:mm:ss"))
         .withColumn("rowKey", rowKey($"uri", $"t"))
         .select("rowKey", "v", "t")
-      cleanData
     }
 
   }
@@ -188,13 +177,15 @@ object MinuteValueFlatMapGroupWith {
   type State = mutable.Map[Device, ListBuffer[Double]]
 
   //输出数据
-  case class DataInfo(gatewayId: String, namespace: String, pointId: String, t: String, v: String, s: String, t2: String, t3: String)
+  case class DataInfo(id:String,uri:String,gatewayId: String, namespace: String, pointId: String, t: String, v: String, s: String, wt: String, t3: String)
 
-  case class outData(gatewayId: String, namespace: String, pointId: String, t: String, sum_v: Double, avg_v: Double, last_v: Double, s: String)
+  case class outData(id:String,uri:String,gatewayId: String, namespace: String, pointId: String, t: String, sum_v: Double, avg_v: Double, last_v: Double, s: String)
 
   //迭代器
   def calculate(id: String, inData: Iterator[ DataInfo ], oldState: GroupState[ State ]) = {
     val updateDeviceWithRanges: mutable.TreeMap[ String, outData ] = new mutable.TreeMap[ String, outData ]
+    val oldKey=oldState.getCurrentWatermarkMs()
+    println(oldKey+"----"+new Date(oldKey)+"---"+DateUtil.formatDate(new Date(oldKey),"yyyy-MM-dd HH:mm:ss") )
     //历史状态
     var olderData: State = oldState.getOption.getOrElse(mutable.Map[ Device, ListBuffer[ Double ] ](Device("", "") -> new ListBuffer[ Double ]))
 //    oldState.setTimeoutDuration()
@@ -210,7 +201,7 @@ object MinuteValueFlatMapGroupWith {
       //println("sum:"+sumData+" size:"+oldValue.size+" avg:"+avgData+" lastData:"+lastData)
       val dataMap =new util.TreeMap[Long,String]()
       dataMap.headMap(100000).clear()
-      updateDeviceWithRanges.put(data.t3, outData(data.gatewayId, data.namespace, data.pointId, data.t3, sumData, avgData, lastData, data.s))
+      updateDeviceWithRanges.put(data.t3, outData(data.id,data.uri,data.gatewayId, data.namespace, data.pointId, data.wt, sumData, avgData, lastData, data.s))
     })
     oldState.update(olderData)
     updateDeviceWithRanges.valuesIterator
